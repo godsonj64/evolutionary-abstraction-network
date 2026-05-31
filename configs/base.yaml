@@ -1,0 +1,18 @@
+model:
+  input_dim: 16
+  output_dim: 3
+  latent_dim: 64
+  abstraction_dim: 64
+  hidden_dim: 128
+  abstraction_levels: 3
+  initial_concepts: 4
+  max_concepts: 16
+  top_k: 2
+training:
+  batch_size: 32
+  learning_rate: 0.001
+  prediction_weight: 0.1
+evolution:
+  birth_error_threshold: 0.8
+  novelty_threshold: 0.35
+  merge_similarity_threshold: 0.985
