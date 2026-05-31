@@ -47,7 +47,7 @@ class EvolutionController:
         error_value = 0.0 if prediction_error is None else float(prediction_error.detach().mean().cpu())
         novelty_value = float(self.novelty(abstraction_summary.detach(), population).mean().cpu())
         if error_value > self.birth_error_threshold and novelty_value > self.novelty_threshold:
-            idx = population.append_concept(abstraction_summary.detach().mean(dim=0).cpu())
+            idx = population.append_concept(abstraction_summary.detach().mean(dim=0))
             if idx >= 0:
                 events["born"] += 1
 
@@ -59,19 +59,19 @@ class EvolutionController:
                 c.consolidated = True
                 events["consolidated"] += 1
 
-        events["merged"] += self._merge_redundant(population)
+        events["merged"] += self._merge_redundant(population, device=abstraction_summary.device)
         events["pruned"] += self._prune_weak(population)
         return events
 
     @torch.no_grad()
-    def _merge_redundant(self, population: ConceptPopulation) -> int:
+    def _merge_redundant(self, population: ConceptPopulation, device: torch.device | None = None) -> int:
         n = len(population)
         if n <= self.min_concepts:
             return 0
-        p = torch.nn.functional.normalize(population.prototypes(), dim=-1)
+        p = torch.nn.functional.normalize(population.prototypes(device=device), dim=-1)
         sim = p @ p.T
         sim.fill_diagonal_(-1.0)
-        young = torch.tensor([int(c.age.item()) < 5 for c in population], dtype=torch.bool)
+        young = torch.tensor([int(c.age.item()) < 5 for c in population], dtype=torch.bool, device=sim.device)
         if young.any():
             sim[young, :] = -1.0
             sim[:, young] = -1.0
@@ -83,8 +83,8 @@ class EvolutionController:
         if i == j:
             return 0
         keep, drop = min(i, j), max(i, j)
-        merged = 0.5 * (population[keep].prototype + population[drop].prototype)
-        population[keep].prototype.copy_(merged)
+        merged = 0.5 * (population[keep].prototype.to(sim.device) + population[drop].prototype.to(sim.device))
+        population[keep].prototype.copy_(merged.to(population[keep].prototype.device))
         keep_indices = [idx for idx in range(n) if idx != drop]
         population.remove_concepts(keep_indices)
         return 1
