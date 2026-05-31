@@ -91,15 +91,33 @@ class EvolutionController:
 
     @torch.no_grad()
     def _prune_weak(self, population: ConceptPopulation) -> int:
-        if len(population) <= self.min_concepts:
+        n = len(population)
+        if n <= self.min_concepts:
             return 0
-        keep = []
-        for i, c in enumerate(population):
-            too_young_to_prune = int(c.age.item()) < 5
-            must_keep_for_minimum = len(population) - len(keep) <= self.min_concepts
-            if too_young_to_prune or must_keep_for_minimum or float(c.fitness.item()) >= self.prune_threshold:
-                keep.append(i)
-        removed = len(population) - len(keep)
+
+        min_keep = min(self.min_concepts, n)
+        fitness = torch.tensor([float(c.fitness.item()) for c in population])
+        mature = torch.tensor([int(c.age.item()) >= 5 for c in population], dtype=torch.bool)
+
+        keep_set: set[int] = set()
+
+        # Always preserve young concepts long enough to collect evidence.
+        for i in range(n):
+            if not bool(mature[i]):
+                keep_set.add(i)
+
+        # Preserve mature concepts whose fitness is above the pruning threshold.
+        for i in range(n):
+            if bool(mature[i]) and float(fitness[i]) >= self.prune_threshold:
+                keep_set.add(i)
+
+        # Safety invariant: never allow ecological collapse of the concept pool.
+        if len(keep_set) < min_keep:
+            strongest = torch.topk(fitness, k=min_keep).indices.tolist()
+            keep_set.update(int(i) for i in strongest)
+
+        keep = sorted(keep_set)
+        removed = n - len(keep)
         if removed > 0:
             population.remove_concepts(keep)
         return removed
