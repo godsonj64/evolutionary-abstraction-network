@@ -174,20 +174,6 @@ The Colab launcher sets `PYTHONPATH` automatically, so editable installation is 
 python -m pytest -q
 ```
 
-## Other demos
-
-Synthetic GPU demo:
-
-```bash
-python gpu_demo_train.py --steps 50 --device cuda
-```
-
-CIFAR-100 chunk debug experiment remains available as a fallback:
-
-```bash
-python experiments/split_cifar100_chunk_train.py --device cuda
-```
-
 ## Research status
 
 This is a working research prototype, not a state-of-the-art claim. Current evidence shows that Vision-EAN can run on WILDS/Camelyon17, train with a CNN visual encoder, and log concept birth, merge, pruning, and entropy dynamics. Proper scientific validation still requires:
