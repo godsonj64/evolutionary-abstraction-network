@@ -1,83 +1,109 @@
-# Evolutionary Abstraction Network (EAN)
+# Vision-EAN: Evolutionary Abstraction Networks for Visual Concept Learning
 
-A research prototype for **Evolutionary Abstraction Learning**: a neural architecture where internal concepts are treated as an evolving population of abstractions rather than a fixed stack of layers.
+**Vision-EAN** is the visual-input form of the **Evolutionary Abstraction Network** (EAN): a research prototype where internal concepts are treated as a dynamic population of abstractions rather than as a fixed hidden layer.
 
-## Core idea
+The current Vision-EAN implementation uses a compact CNN encoder, so the tested model is a **CNN-instantiated Vision-EAN**. The name Vision-EAN is intentionally broader than CNN-EAN because future encoders may include ResNet, ConvNeXt, Swin, ViT, or medical foundation encoders.
 
-Learning is modeled as continuous evolution of abstractions under experience pressure. The system includes:
+## Core principle
 
-- perception encoder
-- multi-level abstraction field
-- dynamic concept population
-- sparse concept router
-- latent world model
-- episodic memory
-- fitness evaluation
-- concept birth, mutation, merge, pruning, and consolidation
+> Learning is the continuous evolution of abstractions under experience pressure.
 
-## Google Colab: direct run
+EAN keeps gradient learning, but adds explicit concept-level dynamics:
 
-Open a new Colab notebook, set **Runtime > Change runtime type > GPU**, then run:
+- concept birth
+- concept merge
+- concept pruning
+- concept mutation
+- concept consolidation
+- concept usage and entropy logging
+- next-batch latent prediction pressure
+
+## Architecture
+
+```text
+Image
+  ↓
+Visual encoder currently implemented as compact CNN
+  ↓
+Latent representation z
+  ↓
+Abstraction Field
+  ↓
+Concept Router
+  ↓
+Dynamic Concept Population
+  ↓
+Top-k Concept Modules
+  ↓
+Concept Aggregator
+  ↓
+Classifier + Latent World Model
+  ↓
+Evolution Controller
+```
+
+The WILDS full benchmark runner uses next-batch latent prediction:
+
+```text
+current batch latent z_t
+predicted next latent z_hat_{t+1}
+true next latent z_{t+1}
+error = ||z_{t+1} - z_hat_{t+1}||
+```
+
+That prediction error is used by the evolution controller together with routing statistics, concept usage, concept age, fitness, novelty, redundancy, and concept entropy.
+
+## Google Colab quickstart
+
+Open a new Colab notebook and set:
+
+```text
+Runtime > Change runtime type > GPU
+```
+
+Then run:
 
 ```python
 !git clone https://github.com/godsonj64/evolutionary-abstraction-network.git
 %cd evolutionary-abstraction-network
-!python colab_run_cifar_chunk.py
+!python colab_run_vision_ean.py --device cuda --quick
 ```
 
-Fast debug run:
+This runs a small Camelyon17-WILDS Vision-EAN smoke test.
+
+## Full Camelyon17-WILDS run
+
+The full run downloads Camelyon17-WILDS and uses the full train/evaluation splits. It can take a long time on Colab, so start with 1 to 3 epochs.
 
 ```python
-!python colab_run_cifar_chunk.py --quick
+!python colab_run_vision_ean.py --device cuda --full --epochs 3
 ```
 
-Force CUDA:
+For a longer experiment:
 
 ```python
-!python colab_run_cifar_chunk.py --device cuda
+!python colab_run_vision_ean.py --device cuda --full --epochs 10
 ```
 
-The launcher installs dependencies, installs the package in editable mode, selects CUDA when available, runs the chunked CIFAR-100 experiment, and saves metrics to:
+Outputs:
 
 ```text
-outputs/cifar100_chunk_metrics.csv
+outputs/wilds_full_metrics.csv
+outputs/wilds_full_summary.json
 ```
 
-## Manual install
+## Direct WILDS scripts
+
+Sampled WILDS experiment:
 
 ```bash
-pip install -r requirements.txt
-pip install -e .
-```
-
-## Run tests
-
-```bash
-python -m pytest -q
-```
-
-## CPU demo
-
-```bash
-python demo_train.py
-```
-
-## GPU-ready toy demo
-
-```bash
-python gpu_demo_train.py --steps 50 --device cuda
-```
-
-## Chunked CIFAR-100 experiment
-
-```bash
-python experiments/split_cifar100_chunk_train.py \
-  --num-chunks 3 \
-  --classes-per-chunk 5 \
-  --train-samples-per-chunk 500 \
-  --test-samples-per-chunk 200 \
-  --epochs-per-chunk 1 \
+python experiments/wilds_image_benchmark_train.py \
+  --dataset camelyon17 \
+  --train-samples 512 \
+  --eval-samples 256 \
+  --epochs 10 \
   --batch-size 64 \
+  --image-size 64 \
   --latent-dim 128 \
   --abstraction-dim 128 \
   --hidden-dim 256 \
@@ -85,33 +111,94 @@ python experiments/split_cifar100_chunk_train.py \
   --max-concepts 18 \
   --top-k 3 \
   --evolve-every 20 \
+  --download \
   --device cuda
+```
+
+Full WILDS experiment with richer logs:
+
+```bash
+python experiments/wilds_full_benchmark_train.py \
+  --dataset camelyon17 \
+  --epochs 3 \
+  --batch-size 64 \
+  --image-size 64 \
+  --latent-dim 128 \
+  --abstraction-dim 128 \
+  --hidden-dim 256 \
+  --initial-concepts 8 \
+  --max-concepts 24 \
+  --top-k 3 \
+  --evolve-every 50 \
+  --log-every 100 \
+  --download \
+  --device cuda
+```
+
+## Public API
+
+```python
+from ean import VisionEANConfig, VisionEvolutionaryAbstractionNetwork
+
+model = VisionEvolutionaryAbstractionNetwork(
+    VisionEANConfig(
+        output_dim=2,
+        image_channels=3,
+        latent_dim=128,
+        abstraction_dim=128,
+        hidden_dim=256,
+        initial_concepts=8,
+        max_concepts=24,
+        top_k=3,
+    )
+)
+```
+
+Backward-compatible aliases are retained:
+
+```python
+from ean import ImageEANConfig, ImageEvolutionaryAbstractionNetwork
+```
+
+## Manual install
+
+```bash
+pip install -r requirements.txt
+```
+
+The Colab launcher sets `PYTHONPATH` automatically, so editable installation is not required.
+
+## Run tests
+
+```bash
+python -m pytest -q
+```
+
+## Other demos
+
+Synthetic GPU demo:
+
+```bash
+python gpu_demo_train.py --steps 50 --device cuda
+```
+
+CIFAR-100 chunk debug experiment remains available as a fallback:
+
+```bash
+python experiments/split_cifar100_chunk_train.py --device cuda
 ```
 
 ## Research status
 
-This is a tested prototype, not a frontier-scale model. The present version validates the architectural mechanism: dynamic concept modules, abstraction routing, episodic memory, and evolution operators. Next research stages should add semantic/procedural memory, continual-task benchmarks, real-world datasets, and larger pretrained encoders.
+This is a working research prototype, not a state-of-the-art claim. Current evidence shows that Vision-EAN can run on WILDS/Camelyon17, train with a CNN visual encoder, and log concept birth, merge, pruning, and entropy dynamics. Proper scientific validation still requires:
 
-## Architecture
+- CNN-only baseline
+- ResNet or ViT baseline
+- repeated random seeds
+- ablation of birth/merge/prune/mutation/consolidation
+- domain-shift analysis
+- stronger diversity regularization
 
-```text
-Input
-  ↓
-MLP / Encoder
-  ↓
-Abstraction Field
-  ↓
-Concept Router
-  ↓
-Top-K Concept Modules
-  ↓
-Concept Aggregator
-  ↓
-Output Head + Latent World Model
-  ↓
-Evolution Controller
-```
+## Attribution
 
-## Principle
-
-> Learning is the continuous evolution of abstractions under experience pressure.
+Original design: **Godson Johnson**.
