@@ -114,6 +114,46 @@ outputs/wilds_full_metrics.csv
 outputs/wilds_full_summary.json
 ```
 
+## High-memory GPU one-epoch workflow
+
+For a large GPU instance, for example 80 GB VRAM and high system RAM, use the high-throughput workflow. It trains one full Camelyon17-WILDS epoch with a large batch, saves checkpoints, evaluates splits, and immediately produces inference sample images and maps.
+
+```bash
+python experiments/vision_ean_80gb_1epoch_train_infer.py \
+  --device cuda \
+  --batch-size 512 \
+  --eval-batch-size 512 \
+  --num-workers 8 \
+  --amp \
+  --download
+```
+
+For even larger GPUs, you can try:
+
+```bash
+python experiments/vision_ean_80gb_1epoch_train_infer.py \
+  --device cuda \
+  --batch-size 1024 \
+  --eval-batch-size 1024 \
+  --num-workers 12 \
+  --amp \
+  --download
+```
+
+Outputs:
+
+```text
+outputs/vision_ean_80gb_1epoch/checkpoints/vision_ean_last.pt
+outputs/vision_ean_80gb_1epoch/checkpoints/vision_ean_best_val.pt
+outputs/vision_ean_80gb_1epoch/vision_ean_80gb_metrics.csv
+outputs/vision_ean_80gb_1epoch/vision_ean_80gb_summary.json
+outputs/vision_ean_80gb_1epoch/inference_predictions.csv
+outputs/vision_ean_80gb_1epoch/inference_figures/vision_ean_sample_predictions.png
+outputs/vision_ean_80gb_1epoch/inference_figures/vision_ean_concept_routing_heatmap.png
+outputs/vision_ean_80gb_1epoch/inference_figures/vision_ean_concept_usage_bar.png
+outputs/vision_ean_80gb_1epoch/inference_figures/vision_ean_latent_pca_map.png
+```
+
 ## Vision-EAN scripts
 
 Sampled WILDS experiment:
