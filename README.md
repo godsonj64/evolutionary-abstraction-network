@@ -157,6 +157,34 @@ python experiments/wilds_full_benchmark_train.py \
   --device cuda
 ```
 
+## Current Vision-EAN Camelyon17-WILDS run summary
+
+These plots summarize one full-split Vision-EAN run on Camelyon17-WILDS. The run used CUDA, a compact CNN visual encoder, 302,436 training samples, and full `id_val`, `val`, and `test` evaluation splits.
+
+This is a logged prototype result, not a state-of-the-art claim. The useful signal is the combination of source learning, shifted-split behavior, and measurable concept-evolution dynamics.
+
+| Quantity | Value |
+|---|---:|
+| Epochs | 3 |
+| Global steps | 7,089 |
+| Runtime | 14.97 min |
+| Final concepts | 4 |
+| Final concept entropy | 0.555 |
+| Cumulative born | 98 |
+| Cumulative merged | 101 |
+| Cumulative pruned | 1 |
+| Best ID validation | 0.9798 at epoch 2 |
+| Best validation | 0.8027 at epoch 0 |
+| Best test | 0.7189 at epoch 0 |
+
+![Vision-EAN training trajectory](docs/assets/vision_ean_training_trajectory.svg)
+
+![Vision-EAN domain accuracy map](docs/assets/vision_ean_domain_accuracy_map.svg)
+
+![Vision-EAN evolution events map](docs/assets/vision_ean_evolution_events_map.svg)
+
+![Vision-EAN concept entropy map](docs/assets/vision_ean_concept_entropy_map.svg)
+
 ## Public API
 
 General EAN:
