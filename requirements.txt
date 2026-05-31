@@ -1,5 +1,6 @@
 torch
 torchvision
+wilds
 pytest
 pyyaml
 numpy
