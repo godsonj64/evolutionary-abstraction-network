@@ -15,7 +15,35 @@ Learning is modeled as continuous evolution of abstractions under experience pre
 - fitness evaluation
 - concept birth, mutation, merge, pruning, and consolidation
 
-## Install
+## Google Colab: direct run
+
+Open a new Colab notebook, set **Runtime > Change runtime type > GPU**, then run:
+
+```python
+!git clone https://github.com/godsonj64/evolutionary-abstraction-network.git
+%cd evolutionary-abstraction-network
+!python colab_run_cifar_chunk.py
+```
+
+Fast debug run:
+
+```python
+!python colab_run_cifar_chunk.py --quick
+```
+
+Force CUDA:
+
+```python
+!python colab_run_cifar_chunk.py --device cuda
+```
+
+The launcher installs dependencies, installs the package in editable mode, selects CUDA when available, runs the chunked CIFAR-100 experiment, and saves metrics to:
+
+```text
+outputs/cifar100_chunk_metrics.csv
+```
+
+## Manual install
 
 ```bash
 pip install -r requirements.txt
@@ -34,37 +62,30 @@ python -m pytest -q
 python demo_train.py
 ```
 
-## GPU-ready demo
+## GPU-ready toy demo
 
 ```bash
-python gpu_demo_train.py --steps 50
+python gpu_demo_train.py --steps 50 --device cuda
 ```
 
-Force CPU:
+## Chunked CIFAR-100 experiment
 
 ```bash
-python gpu_demo_train.py --steps 10 --device cpu
-```
-
-Force CUDA:
-
-```bash
-python gpu_demo_train.py --steps 100 --device cuda
-```
-
-## Google Colab
-
-Open `colab_train_ean.ipynb`, set **Runtime > Change runtime type > GPU**, then run the cells.
-
-Minimal Colab commands:
-
-```python
-!git clone https://github.com/godsonj64/evolutionary-abstraction-network.git
-%cd evolutionary-abstraction-network
-!pip install -e .
-!pip install -r requirements.txt
-!pytest -q
-!python gpu_demo_train.py --steps 50
+python experiments/split_cifar100_chunk_train.py \
+  --num-chunks 3 \
+  --classes-per-chunk 5 \
+  --train-samples-per-chunk 500 \
+  --test-samples-per-chunk 200 \
+  --epochs-per-chunk 1 \
+  --batch-size 64 \
+  --latent-dim 128 \
+  --abstraction-dim 128 \
+  --hidden-dim 256 \
+  --initial-concepts 6 \
+  --max-concepts 18 \
+  --top-k 3 \
+  --evolve-every 20 \
+  --device cuda
 ```
 
 ## Research status
