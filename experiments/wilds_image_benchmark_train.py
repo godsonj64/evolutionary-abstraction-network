@@ -27,8 +27,7 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise SystemExit("wilds is required. Install with: pip install wilds") from exc
 
-from ean import EANConfig, EvolutionaryAbstractionNetwork
-from ean.image_model import ImageEANConfig, ImageEvolutionaryAbstractionNetwork
+from ean import EANConfig, EvolutionaryAbstractionNetwork, VisionEANConfig, VisionEvolutionaryAbstractionNetwork
 from ean.losses.ean_loss import ean_loss
 
 
@@ -84,7 +83,7 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> floa
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="WILDS image benchmark smoke test for EAN.")
+    parser = argparse.ArgumentParser(description="WILDS image benchmark smoke test for Vision-EAN.")
     parser.add_argument("--dataset", type=str, default="camelyon17", help="WILDS image dataset name. Default: camelyon17")
     parser.add_argument("--data-dir", type=str, default="./data/wilds")
     parser.add_argument("--output", type=str, default="outputs/wilds_benchmark_metrics.csv")
@@ -95,7 +94,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--image-size", type=int, default=64)
-    parser.add_argument("--encoder", type=str, default="cnn", choices=["cnn", "flatten"], help="Use CNN image encoder or flattened vector encoder. Default: cnn")
+    parser.add_argument("--encoder", type=str, default="cnn", choices=["cnn", "flatten"], help="Use CNN visual encoder or flattened vector encoder. Default: cnn")
     parser.add_argument("--cnn-base-channels", type=int, default=32)
     parser.add_argument("--latent-dim", type=int, default=128)
     parser.add_argument("--abstraction-dim", type=int, default=128)
@@ -139,8 +138,8 @@ def get_split_safely(dataset: Any, split: str, transform: Any):
 
 def build_model(args: argparse.Namespace, n_classes: int) -> nn.Module:
     if args.encoder == "cnn":
-        return ImageEvolutionaryAbstractionNetwork(
-            ImageEANConfig(
+        return VisionEvolutionaryAbstractionNetwork(
+            VisionEANConfig(
                 output_dim=n_classes,
                 image_channels=3,
                 latent_dim=args.latent_dim,
@@ -190,13 +189,7 @@ def main() -> None:
         raise RuntimeError(f"Could not load train split {args.train_split!r}")
     train_data = WildsImageDataset(train_subset_raw, flatten=flatten)
     train_data = limited_subset(train_data, args.train_samples, args.seed)
-    train_loader = DataLoader(
-        train_data,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=2,
-        pin_memory=device.type == "cuda",
-    )
+    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=device.type == "cuda")
 
     eval_loaders = {}
     for split in [s.strip() for s in args.eval_splits.split(",") if s.strip()]:
@@ -205,17 +198,13 @@ def main() -> None:
             continue
         wrapped = WildsImageDataset(raw, flatten=flatten)
         wrapped = limited_subset(wrapped, args.eval_samples, args.seed + hash(split) % 10000)
-        eval_loaders[split] = DataLoader(
-            wrapped,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=2,
-            pin_memory=device.type == "cuda",
-        )
+        eval_loaders[split] = DataLoader(wrapped, batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=device.type == "cuda")
 
     model = build_model(args, n_classes).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
+    print("model_family=Vision-EAN")
+    print("vision_encoder=cnn" if args.encoder == "cnn" else "vision_encoder=flatten")
     print(f"dataset={args.dataset}")
     print(f"device={device}")
     print(f"encoder={args.encoder}")
@@ -253,6 +242,7 @@ def main() -> None:
 
         evals = {f"acc_{split}": evaluate(model, loader, device) for split, loader in eval_loaders.items()}
         row = {
+            "model_family": "Vision-EAN",
             "dataset": args.dataset,
             "encoder": args.encoder,
             "epoch": epoch,
