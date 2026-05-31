@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11']
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+      - name: Run unit tests
+        run: pytest -q
+      - name: Run standard demo
+        run: python demo_train.py
+      - name: Run GPU script on CPU fallback
+        run: python gpu_demo_train.py --steps 1 --batch-size 4 --input-dim 12 --hidden-dim 32 --latent-dim 16 --abstraction-dim 16 --initial-concepts 3 --max-concepts 6 --top-k 2 --device cpu
