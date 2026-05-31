@@ -96,7 +96,33 @@ def test_population_respects_max_concepts():
     assert len(model.population) == 2
 
 
-def test_merge_redundant_concepts():
+def test_merge_redundant_concepts_after_maturation():
+    model = EvolutionaryAbstractionNetwork(
+        EANConfig(
+            input_dim=4,
+            output_dim=2,
+            latent_dim=8,
+            abstraction_dim=8,
+            hidden_dim=16,
+            initial_concepts=3,
+            max_concepts=5,
+            top_k=1,
+        )
+    )
+    with torch.no_grad():
+        model.population[0].prototype.fill_(1.0)
+        model.population[1].prototype.fill_(1.0)
+        model.population[2].prototype.copy_(torch.arange(8).float())
+        for concept in model.population:
+            concept.age.fill_(20)
+    model.evolution.min_concepts = 2
+    model.evolution.merge_similarity_threshold = 0.99
+    merged = model.evolution._merge_redundant(model.population)
+    assert merged == 1
+    assert len(model.population) == 2
+
+
+def test_merge_protects_immature_redundant_concepts():
     model = EvolutionaryAbstractionNetwork(
         EANConfig(
             input_dim=4,
@@ -118,8 +144,8 @@ def test_merge_redundant_concepts():
     model.evolution.min_concepts = 2
     model.evolution.merge_similarity_threshold = 0.99
     merged = model.evolution._merge_redundant(model.population)
-    assert merged == 1
-    assert len(model.population) == 2
+    assert merged == 0
+    assert len(model.population) == 3
 
 
 def test_invalid_input_shape_raises():
