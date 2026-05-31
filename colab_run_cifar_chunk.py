@@ -5,8 +5,8 @@ from __future__ import annotations
 Default usage in Colab:
     !python colab_run_cifar_chunk.py
 
-The default now runs a real WILDS benchmark smoke test. CIFAR-100 remains
-available as a fallback/debug mode.
+Full WILDS benchmark:
+    !python colab_run_cifar_chunk.py --device cuda --full --epochs 25
 """
 
 import argparse
@@ -26,7 +26,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--benchmark", default="wilds", choices=["wilds", "cifar"], help="Benchmark to run. Default: wilds")
     parser.add_argument("--wilds-dataset", default="camelyon17", help="WILDS dataset name. Default: camelyon17")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu", "mps"])
-    parser.add_argument("--quick", action="store_true", help="Use the smaller sample-size run. WILDS quick mode now trains for 10 epochs by default.")
+    parser.add_argument("--quick", action="store_true", help="Use the smaller sample-size run.")
+    parser.add_argument("--full", action="store_true", help="Run the full WILDS train/eval splits with richer logs.")
+    parser.add_argument("--epochs", type=int, default=None, help="Override epoch count.")
     parser.add_argument("--skip-install", action="store_true", help="Skip pip dependency installation.")
     parser.add_argument("--no-download", action="store_true", help="Do not download benchmark data if missing.")
     return parser.parse_args()
@@ -48,12 +50,27 @@ def resolve_device(choice: str) -> str:
 
 
 def wilds_args(args: argparse.Namespace) -> list[str]:
+    if args.full:
+        return [
+            "--dataset", args.wilds_dataset,
+            "--epochs", str(args.epochs if args.epochs is not None else 25),
+            "--batch-size", "64",
+            "--image-size", "64",
+            "--latent-dim", "128",
+            "--abstraction-dim", "128",
+            "--hidden-dim", "256",
+            "--initial-concepts", "8",
+            "--max-concepts", "24",
+            "--top-k", "3",
+            "--evolve-every", "50",
+            "--log-every", "100",
+        ]
     if args.quick:
         return [
             "--dataset", args.wilds_dataset,
             "--train-samples", "128",
             "--eval-samples", "64",
-            "--epochs", "10",
+            "--epochs", str(args.epochs if args.epochs is not None else 10),
             "--batch-size", "32",
             "--image-size", "48",
             "--latent-dim", "64",
@@ -68,7 +85,7 @@ def wilds_args(args: argparse.Namespace) -> list[str]:
         "--dataset", args.wilds_dataset,
         "--train-samples", "512",
         "--eval-samples", "256",
-        "--epochs", "10",
+        "--epochs", str(args.epochs if args.epochs is not None else 10),
         "--batch-size", "64",
         "--image-size", "64",
         "--latent-dim", "128",
@@ -82,13 +99,14 @@ def wilds_args(args: argparse.Namespace) -> list[str]:
 
 
 def cifar_args(args: argparse.Namespace) -> list[str]:
+    epochs = str(args.epochs if args.epochs is not None else 10)
     if args.quick:
         return [
             "--num-chunks", "2",
             "--classes-per-chunk", "3",
             "--train-samples-per-chunk", "120",
             "--test-samples-per-chunk", "60",
-            "--epochs-per-chunk", "10",
+            "--epochs-per-chunk", epochs,
             "--batch-size", "32",
             "--latent-dim", "64",
             "--abstraction-dim", "64",
@@ -103,7 +121,7 @@ def cifar_args(args: argparse.Namespace) -> list[str]:
         "--classes-per-chunk", "5",
         "--train-samples-per-chunk", "500",
         "--test-samples-per-chunk", "200",
-        "--epochs-per-chunk", "10",
+        "--epochs-per-chunk", epochs,
         "--batch-size", "64",
         "--latent-dim", "128",
         "--abstraction-dim", "128",
@@ -139,8 +157,12 @@ def main() -> None:
         exp_args = wilds_args(args)
         if not args.no_download:
             exp_args.append("--download")
-        script = root / "experiments" / "wilds_image_benchmark_train.py"
-        done_msg = "Finished. Metrics saved to outputs/wilds_benchmark_metrics.csv"
+        if args.full:
+            script = root / "experiments" / "wilds_full_benchmark_train.py"
+            done_msg = "Finished. Metrics saved to outputs/wilds_full_metrics.csv and outputs/wilds_full_summary.json"
+        else:
+            script = root / "experiments" / "wilds_image_benchmark_train.py"
+            done_msg = "Finished. Metrics saved to outputs/wilds_benchmark_metrics.csv"
     else:
         exp_args = cifar_args(args)
         script = root / "experiments" / "split_cifar100_chunk_train.py"
