@@ -1,8 +1,8 @@
-# Vision-EAN: Evolutionary Abstraction Networks for Visual Concept Learning
+# Evolutionary Abstraction Network (EAN)
 
-**Vision-EAN** is the visual-input form of the **Evolutionary Abstraction Network** (EAN): a research prototype where internal concepts are treated as a dynamic population of abstractions rather than as a fixed hidden layer.
+**Evolutionary Abstraction Network** (**EAN**) is a research prototype where internal concepts are treated as a dynamic population of abstractions rather than as a fixed hidden layer.
 
-The current Vision-EAN implementation uses a compact CNN encoder, so the tested model is a **CNN-instantiated Vision-EAN**. The name Vision-EAN is intentionally broader than CNN-EAN because future encoders may include ResNet, ConvNeXt, Swin, ViT, or medical foundation encoders.
+EAN is the general architecture. **Vision-EAN** is the visual-input variant of EAN. The current Vision-EAN implementation uses a compact CNN encoder, so the tested visual model is a **CNN-instantiated Vision-EAN**. The name Vision-EAN is intentionally broader than CNN-EAN because future visual encoders may include ResNet, ConvNeXt, Swin, ViT, or medical foundation encoders.
 
 ## Core principle
 
@@ -16,14 +16,14 @@ EAN keeps gradient learning, but adds explicit concept-level dynamics:
 - concept mutation
 - concept consolidation
 - concept usage and entropy logging
-- next-batch latent prediction pressure
+- latent prediction pressure
 
-## Architecture
+## General EAN architecture
 
 ```text
-Image
+Input
   ↓
-Visual encoder currently implemented as compact CNN
+Encoder
   ↓
 Latent representation z
   ↓
@@ -37,9 +37,31 @@ Top-k Concept Modules
   ↓
 Concept Aggregator
   ↓
-Classifier + Latent World Model
+Output Head + Latent World Model
   ↓
 Evolution Controller
+```
+
+## Vision-EAN variant
+
+Vision-EAN specializes EAN for visual representation learning:
+
+```text
+Image
+  ↓
+Visual encoder currently implemented as compact CNN
+  ↓
+Latent representation z
+  ↓
+EAN abstraction field
+  ↓
+EAN concept router
+  ↓
+EAN dynamic concept population
+  ↓
+Classifier + latent world model
+  ↓
+Evolution controller
 ```
 
 The WILDS full benchmark runner uses next-batch latent prediction:
@@ -53,7 +75,7 @@ error = ||z_{t+1} - z_hat_{t+1}||
 
 That prediction error is used by the evolution controller together with routing statistics, concept usage, concept age, fitness, novelty, redundancy, and concept entropy.
 
-## Google Colab quickstart
+## Google Colab quickstart for Vision-EAN
 
 Open a new Colab notebook and set:
 
@@ -71,7 +93,7 @@ Then run:
 
 This runs a small Camelyon17-WILDS Vision-EAN smoke test.
 
-## Full Camelyon17-WILDS run
+## Full Camelyon17-WILDS Vision-EAN run
 
 The full run downloads Camelyon17-WILDS and uses the full train/evaluation splits. It can take a long time on Colab, so start with 1 to 3 epochs.
 
@@ -92,7 +114,7 @@ outputs/wilds_full_metrics.csv
 outputs/wilds_full_summary.json
 ```
 
-## Direct WILDS scripts
+## Vision-EAN scripts
 
 Sampled WILDS experiment:
 
@@ -137,6 +159,27 @@ python experiments/wilds_full_benchmark_train.py \
 
 ## Public API
 
+General EAN:
+
+```python
+from ean import EANConfig, EvolutionaryAbstractionNetwork
+
+model = EvolutionaryAbstractionNetwork(
+    EANConfig(
+        input_dim=128,
+        output_dim=2,
+        latent_dim=128,
+        abstraction_dim=128,
+        hidden_dim=256,
+        initial_concepts=8,
+        max_concepts=24,
+        top_k=3,
+    )
+)
+```
+
+Vision-EAN:
+
 ```python
 from ean import VisionEANConfig, VisionEvolutionaryAbstractionNetwork
 
@@ -176,7 +219,7 @@ python -m pytest -q
 
 ## Research status
 
-This is a working research prototype, not a state-of-the-art claim. Current evidence shows that Vision-EAN can run on WILDS/Camelyon17, train with a CNN visual encoder, and log concept birth, merge, pruning, and entropy dynamics. Proper scientific validation still requires:
+This is a working research prototype, not a state-of-the-art claim. Current evidence shows that the Vision-EAN variant can run on WILDS/Camelyon17, train with a CNN visual encoder, and log concept birth, merge, pruning, and entropy dynamics. Proper scientific validation still requires:
 
 - CNN-only baseline
 - ResNet or ViT baseline
