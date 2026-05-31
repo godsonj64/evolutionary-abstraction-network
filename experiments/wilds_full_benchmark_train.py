@@ -28,7 +28,7 @@ from experiments.wilds_image_benchmark_train import (
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Full WILDS/CNN-EAN benchmark with richer logs.")
+    p = argparse.ArgumentParser(description="Full WILDS/Vision-EAN benchmark with richer logs.")
     p.add_argument("--dataset", default="camelyon17")
     p.add_argument("--data-dir", default="./data/wilds")
     p.add_argument("--output", default="outputs/wilds_full_metrics.csv")
@@ -126,6 +126,8 @@ def main() -> None:
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
     print({
+        "model_family": "Vision-EAN",
+        "vision_encoder": args.encoder,
         "dataset": args.dataset,
         "device": str(device),
         "encoder": args.encoder,
@@ -185,6 +187,7 @@ def main() -> None:
             if args.log_every > 0 and global_step % args.log_every == 0:
                 print({
                     "type": "batch",
+                    "model_family": "Vision-EAN",
                     "epoch": epoch,
                     "batch": batch_idx,
                     "global_step": global_step,
@@ -197,6 +200,7 @@ def main() -> None:
                 })
 
         row = {
+            "model_family": "Vision-EAN",
             "epoch": epoch,
             "global_step": global_step,
             "train_loss": loss_sum / max(1, total),
@@ -222,6 +226,8 @@ def main() -> None:
         writer.writerows(rows)
 
     summary = {
+        "model_family": "Vision-EAN",
+        "vision_encoder": args.encoder,
         "dataset": args.dataset,
         "encoder": args.encoder,
         "device": str(device),
