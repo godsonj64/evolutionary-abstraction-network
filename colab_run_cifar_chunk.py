@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--benchmark", default="wilds", choices=["wilds", "cifar"], help="Benchmark to run. Default: wilds")
     parser.add_argument("--wilds-dataset", default="camelyon17", help="WILDS dataset name. Default: camelyon17")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu", "mps"])
-    parser.add_argument("--quick", action="store_true", help="Use a smaller debug run.")
+    parser.add_argument("--quick", action="store_true", help="Use the smaller sample-size run. WILDS quick mode now trains for 10 epochs by default.")
     parser.add_argument("--skip-install", action="store_true", help="Skip pip dependency installation.")
     parser.add_argument("--no-download", action="store_true", help="Do not download benchmark data if missing.")
     return parser.parse_args()
@@ -53,7 +53,7 @@ def wilds_args(args: argparse.Namespace) -> list[str]:
             "--dataset", args.wilds_dataset,
             "--train-samples", "128",
             "--eval-samples", "64",
-            "--epochs", "1",
+            "--epochs", "10",
             "--batch-size", "32",
             "--image-size", "48",
             "--latent-dim", "64",
@@ -68,7 +68,7 @@ def wilds_args(args: argparse.Namespace) -> list[str]:
         "--dataset", args.wilds_dataset,
         "--train-samples", "512",
         "--eval-samples", "256",
-        "--epochs", "1",
+        "--epochs", "10",
         "--batch-size", "64",
         "--image-size", "64",
         "--latent-dim", "128",
@@ -88,7 +88,7 @@ def cifar_args(args: argparse.Namespace) -> list[str]:
             "--classes-per-chunk", "3",
             "--train-samples-per-chunk", "120",
             "--test-samples-per-chunk", "60",
-            "--epochs-per-chunk", "1",
+            "--epochs-per-chunk", "10",
             "--batch-size", "32",
             "--latent-dim", "64",
             "--abstraction-dim", "64",
@@ -103,7 +103,7 @@ def cifar_args(args: argparse.Namespace) -> list[str]:
         "--classes-per-chunk", "5",
         "--train-samples-per-chunk", "500",
         "--test-samples-per-chunk", "200",
-        "--epochs-per-chunk", "1",
+        "--epochs-per-chunk", "10",
         "--batch-size", "64",
         "--latent-dim", "128",
         "--abstraction-dim", "128",
