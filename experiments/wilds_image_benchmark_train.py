@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import csv
 from pathlib import Path
+from typing import Any
 
 import torch
-from torch import optim
+from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset, Subset
 
 try:
@@ -19,18 +20,16 @@ except ImportError as exc:  # pragma: no cover
     raise SystemExit("wilds is required. Install with: pip install wilds") from exc
 
 from ean import EANConfig, EvolutionaryAbstractionNetwork
+from ean.image_model import ImageEANConfig, ImageEvolutionaryAbstractionNetwork
 from ean.losses.ean_loss import ean_loss
 
 
-class WildsImageVectorDataset(Dataset):
-    """Wrap a WILDS image subset and return flattened image vectors.
+class WildsImageDataset(Dataset):
+    """Wrap a WILDS image subset and keep image tensors in spatial form."""
 
-    The current EAN prototype is vector-based. This wrapper lets us run a real
-    WILDS benchmark before replacing the MLP encoder with a CNN/ViT encoder.
-    """
-
-    def __init__(self, subset: Dataset):
+    def __init__(self, subset: Dataset, flatten: bool = False):
         self.subset = subset
+        self.flatten = flatten
 
     def __len__(self) -> int:
         return len(self.subset)
@@ -46,8 +45,10 @@ class WildsImageVectorDataset(Dataset):
             raise ValueError(f"Unexpected WILDS item length: {len(item)}")
         if not torch.is_tensor(x):
             raise TypeError("Expected transformed image tensor from WILDS subset")
+        if self.flatten:
+            x = x.flatten()
         y = torch.as_tensor(y).long().view(-1)[0]
-        return x.flatten(), y, torch.as_tensor(metadata)
+        return x, y, torch.as_tensor(metadata)
 
 
 def limited_subset(dataset: Dataset, max_samples: int, seed: int) -> Subset:
@@ -58,7 +59,7 @@ def limited_subset(dataset: Dataset, max_samples: int, seed: int) -> Subset:
 
 
 @torch.no_grad()
-def evaluate(model: EvolutionaryAbstractionNetwork, loader: DataLoader, device: torch.device) -> float:
+def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> float:
     model.eval()
     correct = 0
     total = 0
@@ -86,6 +87,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--image-size", type=int, default=64)
+    parser.add_argument("--encoder", type=str, default="cnn", choices=["cnn", "flatten"], help="Use CNN image encoder or flattened vector encoder. Default: cnn")
+    parser.add_argument("--cnn-base-channels", type=int, default=32)
     parser.add_argument("--latent-dim", type=int, default=128)
     parser.add_argument("--abstraction-dim", type=int, default=128)
     parser.add_argument("--hidden-dim", type=int, default=256)
@@ -118,12 +121,43 @@ def resolve_device(choice: str) -> torch.device:
     return torch.device("cpu")
 
 
-def get_split_safely(dataset, split: str, transform):
+def get_split_safely(dataset: Any, split: str, transform: Any):
     try:
         return dataset.get_subset(split, transform=transform)
     except Exception as exc:
         print(f"Skipping split={split!r}: {exc}")
         return None
+
+
+def build_model(args: argparse.Namespace, n_classes: int) -> nn.Module:
+    if args.encoder == "cnn":
+        return ImageEvolutionaryAbstractionNetwork(
+            ImageEANConfig(
+                output_dim=n_classes,
+                image_channels=3,
+                latent_dim=args.latent_dim,
+                abstraction_dim=args.abstraction_dim,
+                hidden_dim=args.hidden_dim,
+                cnn_base_channels=args.cnn_base_channels,
+                initial_concepts=args.initial_concepts,
+                max_concepts=args.max_concepts,
+                top_k=args.top_k,
+            )
+        )
+
+    input_dim = 3 * args.image_size * args.image_size
+    return EvolutionaryAbstractionNetwork(
+        EANConfig(
+            input_dim=input_dim,
+            output_dim=n_classes,
+            latent_dim=args.latent_dim,
+            abstraction_dim=args.abstraction_dim,
+            hidden_dim=args.hidden_dim,
+            initial_concepts=args.initial_concepts,
+            max_concepts=args.max_concepts,
+            top_k=args.top_k,
+        )
+    )
 
 
 def main() -> None:
@@ -141,15 +175,15 @@ def main() -> None:
 
     dataset = get_dataset(dataset=args.dataset, root_dir=args.data_dir, download=args.download)
     n_classes = int(getattr(dataset, "n_classes", 2))
-    input_dim = 3 * args.image_size * args.image_size
+    flatten = args.encoder == "flatten"
 
     train_subset_raw = get_split_safely(dataset, args.train_split, transform)
     if train_subset_raw is None:
         raise RuntimeError(f"Could not load train split {args.train_split!r}")
-    train_vector = WildsImageVectorDataset(train_subset_raw)
-    train_vector = limited_subset(train_vector, args.train_samples, args.seed)
+    train_data = WildsImageDataset(train_subset_raw, flatten=flatten)
+    train_data = limited_subset(train_data, args.train_samples, args.seed)
     train_loader = DataLoader(
-        train_vector,
+        train_data,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=2,
@@ -161,7 +195,7 @@ def main() -> None:
         raw = get_split_safely(dataset, split, transform)
         if raw is None:
             continue
-        wrapped = WildsImageVectorDataset(raw)
+        wrapped = WildsImageDataset(raw, flatten=flatten)
         wrapped = limited_subset(wrapped, args.eval_samples, args.seed + hash(split) % 10000)
         eval_loaders[split] = DataLoader(
             wrapped,
@@ -171,25 +205,15 @@ def main() -> None:
             pin_memory=device.type == "cuda",
         )
 
-    model = EvolutionaryAbstractionNetwork(
-        EANConfig(
-            input_dim=input_dim,
-            output_dim=n_classes,
-            latent_dim=args.latent_dim,
-            abstraction_dim=args.abstraction_dim,
-            hidden_dim=args.hidden_dim,
-            initial_concepts=args.initial_concepts,
-            max_concepts=args.max_concepts,
-            top_k=args.top_k,
-        )
-    ).to(device)
+    model = build_model(args, n_classes).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
     print(f"dataset={args.dataset}")
     print(f"device={device}")
+    print(f"encoder={args.encoder}")
     print(f"n_classes={n_classes}")
-    print(f"input_dim={input_dim}")
-    print(f"train_samples={len(train_vector)}")
+    print(f"image_size={args.image_size}")
+    print(f"train_samples={len(train_data)}")
     print(f"eval_splits={list(eval_loaders.keys())}")
 
     rows: list[dict[str, object]] = []
@@ -222,6 +246,7 @@ def main() -> None:
         evals = {f"acc_{split}": evaluate(model, loader, device) for split, loader in eval_loaders.items()}
         row = {
             "dataset": args.dataset,
+            "encoder": args.encoder,
             "epoch": epoch,
             "global_step": global_step,
             "loss": float(losses["total"].detach().cpu()),
