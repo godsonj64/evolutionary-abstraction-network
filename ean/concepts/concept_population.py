@@ -23,7 +23,8 @@ class ConceptPopulation(nn.Module):
     """Dynamic population of concept modules.
 
     Uses ModuleList so PyTorch correctly registers new concepts introduced after
-    initialization.
+    initialization. Newly born concepts inherit the current population device,
+    which is essential when the model is already on CUDA/MPS.
     """
 
     def __init__(self, config: ConceptPopulationConfig):
@@ -39,6 +40,11 @@ class ConceptPopulation(nn.Module):
             hidden_dim=self.config.hidden_dim,
         )
 
+    def _population_device(self) -> torch.device:
+        if len(self.concepts) == 0:
+            return torch.device("cpu")
+        return next(self.concepts[0].parameters()).device
+
     def __len__(self) -> int:
         return len(self.concepts)
 
@@ -51,12 +57,16 @@ class ConceptPopulation(nn.Module):
     def append_concept(self, prototype: torch.Tensor | None = None) -> int:
         if len(self.concepts) >= self.config.max_concepts:
             return -1
-        concept = self._new_concept()
+
+        device = self._population_device()
+        concept = self._new_concept().to(device)
+
         if prototype is not None:
             if prototype.shape[-1] != self.config.abstraction_dim:
                 raise ValueError("prototype has wrong dimension")
             with torch.no_grad():
-                concept.prototype.copy_(prototype.detach().to(concept.prototype.device))
+                concept.prototype.copy_(prototype.detach().to(device=device, dtype=concept.prototype.dtype))
+
         self.concepts.append(concept)
         return len(self.concepts) - 1
 
@@ -69,5 +79,5 @@ class ConceptPopulation(nn.Module):
     def prototypes(self, device: torch.device | None = None) -> torch.Tensor:
         if len(self.concepts) == 0:
             raise RuntimeError("Population is empty")
-        p = torch.stack([c.prototype.detach() for c in self.concepts], dim=0)
-        return p if device is None else p.to(device)
+        target_device = device if device is not None else self._population_device()
+        return torch.stack([c.prototype.detach().to(target_device) for c in self.concepts], dim=0)
