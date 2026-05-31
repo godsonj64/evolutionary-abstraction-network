@@ -55,6 +55,38 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def empty_events() -> dict[str, int]:
+    return {"born": 0, "mutated": 0, "merged": 0, "pruned": 0, "consolidated": 0}
+
+
+def add_events(total: dict[str, int], events: dict[str, int]) -> None:
+    for key in total:
+        total[key] += int(events.get(key, 0))
+
+
+def concept_usage_entropy(model) -> float:
+    usages = torch.tensor([float(c.usage.item()) for c in model.population], dtype=torch.float32)
+    if usages.numel() == 0 or float(usages.sum()) <= 0.0:
+        return 0.0
+    probs = usages / usages.sum().clamp_min(1e-8)
+    return float((-(probs * probs.clamp_min(1e-8).log()).sum()).item())
+
+
+@torch.no_grad()
+def next_batch_latent(model, next_batch, device: torch.device) -> torch.Tensor:
+    x_next = next_batch[0].to(device, non_blocking=True)
+    return model.encoder(x_next).detach()
+
+
+def align_latent_batches(source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    if target.shape[0] == source.shape[0]:
+        return target
+    if target.shape[0] > source.shape[0]:
+        return target[: source.shape[0]]
+    repeats = (source.shape[0] + target.shape[0] - 1) // target.shape[0]
+    return target.repeat((repeats, 1))[: source.shape[0]]
+
+
 def main() -> None:
     args = parse_args()
     torch.manual_seed(args.seed)
@@ -100,12 +132,14 @@ def main() -> None:
         "train_samples": len(train_data),
         "eval_sizes": eval_sizes,
         "epochs": args.epochs,
+        "prediction_target": "next_batch_latent",
     })
 
     rows = []
     best = {}
     global_step = 0
-    last_events = {"born": 0, "mutated": 0, "merged": 0, "pruned": 0, "consolidated": 0}
+    last_events = empty_events()
+    cumulative_events = empty_events()
     start = time.time()
 
     for epoch in range(args.epochs):
@@ -114,12 +148,25 @@ def main() -> None:
         correct = 0
         total = 0
         model.train()
+        iterator = iter(train_loader)
+        batch_idx = 0
 
-        for batch_idx, batch in enumerate(train_loader, start=1):
+        while True:
+            try:
+                batch = next(iterator)
+            except StopIteration:
+                break
+            try:
+                lookahead_batch = next(iterator)
+            except StopIteration:
+                lookahead_batch = batch
+
+            batch_idx += 1
             global_step += 1
             x, y = batch[0].to(device, non_blocking=True), batch[1].to(device, non_blocking=True)
             out = model(x, store_memory=True)
-            losses = ean_loss(out["output"], y, out["next_latent_prediction"], out["latent"].detach(), out["routing_weights_full"])
+            target_next = align_latent_batches(out["latent"], next_batch_latent(model, lookahead_batch, device))
+            losses = ean_loss(out["output"], y, out["next_latent_prediction"], target_next, out["routing_weights_full"])
             optimizer.zero_grad(set_to_none=True)
             losses["total"].backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -131,7 +178,8 @@ def main() -> None:
             total += bs
 
             if global_step % args.evolve_every == 0:
-                last_events = model.evolve_from_outputs(out, next_latent_target=out["latent"].detach())
+                last_events = model.evolve_from_outputs(out, next_latent_target=target_next)
+                add_events(cumulative_events, last_events)
                 optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
             if args.log_every > 0 and global_step % args.log_every == 0:
@@ -143,7 +191,9 @@ def main() -> None:
                     "train_loss": loss_sum / max(1, total),
                     "train_acc": correct / max(1, total),
                     "concepts": len(model.population),
+                    "concept_entropy": concept_usage_entropy(model),
                     **last_events,
+                    **{f"total_{k}": v for k, v in cumulative_events.items()},
                 })
 
         row = {
@@ -152,8 +202,10 @@ def main() -> None:
             "train_loss": loss_sum / max(1, total),
             "train_acc": correct / max(1, total),
             "concepts": len(model.population),
+            "concept_entropy": concept_usage_entropy(model),
             "epoch_sec": time.time() - epoch_start,
             **last_events,
+            **{f"total_{k}": v for k, v in cumulative_events.items()},
         }
         for split, loader in eval_loaders.items():
             acc = evaluate(model, loader, device)
@@ -178,6 +230,8 @@ def main() -> None:
         "epochs": args.epochs,
         "global_steps": global_step,
         "final_concepts": len(model.population),
+        "final_concept_entropy": concept_usage_entropy(model),
+        "cumulative_events": cumulative_events,
         "runtime_sec": time.time() - start,
         "best_by_split": best,
         "last_epoch": rows[-1] if rows else {},
@@ -187,6 +241,7 @@ def main() -> None:
 
     print(f"saved={output}")
     print(f"summary_saved={summary_output}")
+    print(f"cumulative_events={cumulative_events}")
     print(f"best_by_split={best}")
 
 
