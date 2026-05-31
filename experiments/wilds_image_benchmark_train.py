@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 from typing import Any
+
+# Allow direct execution by file path, for example:
+# python experiments/wilds_image_benchmark_train.py
+# In that mode, Python places experiments/ on sys.path rather than the repo root.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import torch
 from torch import nn, optim
