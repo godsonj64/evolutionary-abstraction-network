@@ -7,16 +7,24 @@ from .fitness import FitnessEvaluator
 
 
 class EvolutionController:
-    """Birth, mutation, merge, pruning, and consolidation of concept modules."""
+    """Birth, mutation, merge, pruning, and consolidation of concept modules.
+
+    The controller is intentionally conservative. A concept ecology should not
+    collapse early just because the task loss improves. Abstractions need enough
+    time to specialize, compete, and prove redundancy.
+    """
 
     def __init__(
         self,
         birth_error_threshold: float = 0.8,
         novelty_threshold: float = 0.35,
-        prune_threshold: float = -0.05,
-        merge_similarity_threshold: float = 0.985,
+        prune_threshold: float = -0.20,
+        merge_similarity_threshold: float = 0.995,
         mutation_sigma: float = 1e-3,
-        min_concepts: int = 2,
+        min_concepts: int = 4,
+        min_age_before_prune: int = 20,
+        min_age_before_merge: int = 20,
+        max_prunes_per_step: int = 1,
     ):
         self.birth_error_threshold = birth_error_threshold
         self.novelty_threshold = novelty_threshold
@@ -24,6 +32,9 @@ class EvolutionController:
         self.merge_similarity_threshold = merge_similarity_threshold
         self.mutation_sigma = mutation_sigma
         self.min_concepts = min_concepts
+        self.min_age_before_prune = min_age_before_prune
+        self.min_age_before_merge = min_age_before_merge
+        self.max_prunes_per_step = max_prunes_per_step
         self.fitness_evaluator = FitnessEvaluator()
 
     @torch.no_grad()
@@ -71,10 +82,14 @@ class EvolutionController:
         p = torch.nn.functional.normalize(population.prototypes(device=device), dim=-1)
         sim = p @ p.T
         sim.fill_diagonal_(-1.0)
-        young = torch.tensor([int(c.age.item()) < 5 for c in population], dtype=torch.bool, device=sim.device)
-        if young.any():
-            sim[young, :] = -1.0
-            sim[:, young] = -1.0
+        too_young = torch.tensor(
+            [int(c.age.item()) < self.min_age_before_merge for c in population],
+            dtype=torch.bool,
+            device=sim.device,
+        )
+        if too_young.any():
+            sim[too_young, :] = -1.0
+            sim[:, too_young] = -1.0
         max_val, flat_idx = sim.flatten().max(dim=0)
         if float(max_val) < self.merge_similarity_threshold:
             return 0
@@ -96,28 +111,33 @@ class EvolutionController:
             return 0
 
         min_keep = min(self.min_concepts, n)
+        max_remove = min(self.max_prunes_per_step, max(0, n - min_keep))
+        if max_remove <= 0:
+            return 0
+
         fitness = torch.tensor([float(c.fitness.item()) for c in population])
-        mature = torch.tensor([int(c.age.item()) >= 5 for c in population], dtype=torch.bool)
+        mature = torch.tensor([int(c.age.item()) >= self.min_age_before_prune for c in population], dtype=torch.bool)
 
-        keep_set: set[int] = set()
+        removable = [
+            i
+            for i in range(n)
+            if bool(mature[i]) and float(fitness[i]) < self.prune_threshold
+        ]
+        if not removable:
+            return 0
 
-        # Always preserve young concepts long enough to collect evidence.
-        for i in range(n):
-            if not bool(mature[i]):
-                keep_set.add(i)
+        removable_sorted = sorted(removable, key=lambda i: float(fitness[i]))
+        remove_set = set(removable_sorted[:max_remove])
+        keep = [i for i in range(n) if i not in remove_set]
 
-        # Preserve mature concepts whose fitness is above the pruning threshold.
-        for i in range(n):
-            if bool(mature[i]) and float(fitness[i]) >= self.prune_threshold:
-                keep_set.add(i)
-
-        # Safety invariant: never allow ecological collapse of the concept pool.
-        if len(keep_set) < min_keep:
+        # Final invariant: preserve the strongest concepts if an unexpected edge
+        # case would otherwise shrink the ecology too far.
+        if len(keep) < min_keep:
             strongest = torch.topk(fitness, k=min_keep).indices.tolist()
-            keep_set.update(int(i) for i in strongest)
+            keep = sorted(set(keep).union(int(i) for i in strongest))
+            keep = keep[:n]
 
-        keep = sorted(keep_set)
         removed = n - len(keep)
         if removed > 0:
-            population.remove_concepts(keep)
+            population.remove_concepts(sorted(keep))
         return removed
