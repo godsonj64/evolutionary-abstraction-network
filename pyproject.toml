@@ -1,0 +1,11 @@
+[project]
+name = "evolutionary-abstraction-network"
+version = "0.1.0"
+description = "Research prototype for Evolutionary Abstraction Networks"
+requires-python = ">=3.10"
+dependencies = ["torch", "pytest", "PyYAML", "tqdm"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
