@@ -11,6 +11,7 @@ Optional:
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -25,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Colab one-command launcher for EAN CIFAR-100 chunk experiment.")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu", "mps"])
     parser.add_argument("--quick", action="store_true", help="Use a smaller debug run.")
-    parser.add_argument("--skip-install", action="store_true", help="Skip pip installation.")
+    parser.add_argument("--skip-install", action="store_true", help="Skip pip dependency installation.")
     return parser.parse_args()
 
 
@@ -48,9 +49,14 @@ def main() -> None:
     args = parse_args()
     root = Path(__file__).resolve().parent
 
+    # Make the repo importable without relying on pip editable installs.
+    # This avoids Colab build-backend failures and keeps the launcher robust.
+    os.environ["PYTHONPATH"] = str(root) + os.pathsep + os.environ.get("PYTHONPATH", "")
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
     if not args.skip_install:
         run([sys.executable, "-m", "pip", "install", "-q", "-r", str(root / "requirements.txt")])
-        run([sys.executable, "-m", "pip", "install", "-q", "-e", str(root)])
 
     import torch
 
