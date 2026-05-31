@@ -16,7 +16,16 @@ from ean.world_model.latent_predictor import LatentWorldModel
 
 
 @dataclass(frozen=True)
-class ImageEANConfig:
+class VisionEANConfig:
+    """Configuration for Vision-EAN.
+
+    Vision-EAN is the visual-input form of Evolutionary Abstraction Networks.
+    The current implementation instantiates the vision encoder with a compact
+    CNN, but the name is intentionally broader than CNN-EAN so future encoders
+    such as ResNet, ConvNeXt, Swin, ViT, or medical foundation encoders can be
+    used without renaming the architecture.
+    """
+
     output_dim: int
     image_channels: int = 3
     latent_dim: int = 128
@@ -30,17 +39,18 @@ class ImageEANConfig:
     memory_capacity: int = 4096
 
 
-class ImageEvolutionaryAbstractionNetwork(nn.Module):
-    """Image-native EAN.
+class VisionEvolutionaryAbstractionNetwork(nn.Module):
+    """Vision-EAN: visual representation learning with evolving concepts.
 
     Pipeline:
-        image -> CNN encoder -> EAN abstraction field -> concept population -> classifier
+        image -> visual encoder -> EAN abstraction field -> concept population -> classifier
 
-    This keeps the original evolutionary abstraction core intact while replacing
-    the vector MLP encoder with a spatial CNN encoder suitable for real images.
+    In this implementation, the visual encoder is a compact CNN. This makes the
+    tested model a CNN-instantiated Vision-EAN, not a claim that Vision-EAN must
+    always use CNNs.
     """
 
-    def __init__(self, config: ImageEANConfig):
+    def __init__(self, config: VisionEANConfig):
         super().__init__()
         if config.top_k < 1:
             raise ValueError("top_k must be >= 1")
@@ -132,3 +142,8 @@ class ImageEvolutionaryAbstractionNetwork(nn.Module):
             outputs["routing_weights_full"].detach(),
             prediction_error,
         )
+
+
+# Backward-compatible aliases retained so older notebooks and tests do not break.
+ImageEANConfig = VisionEANConfig
+ImageEvolutionaryAbstractionNetwork = VisionEvolutionaryAbstractionNetwork
