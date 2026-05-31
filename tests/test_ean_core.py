@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 
 from ean import EANConfig, EvolutionaryAbstractionNetwork
+from ean.image_model import ImageEANConfig, ImageEvolutionaryAbstractionNetwork
 from ean.losses.ean_loss import ean_loss
 
 
@@ -54,6 +55,41 @@ def test_loss_backward_updates_gradients():
     losses["total"].backward()
     grads = [p.grad for p in model.parameters() if p.requires_grad]
     assert any(g is not None and torch.isfinite(g).all() and g.abs().sum() > 0 for g in grads)
+
+
+def test_image_ean_forward_and_gradient_flow():
+    torch.manual_seed(11)
+    model = ImageEvolutionaryAbstractionNetwork(
+        ImageEANConfig(
+            output_dim=2,
+            image_channels=3,
+            latent_dim=16,
+            abstraction_dim=16,
+            hidden_dim=24,
+            cnn_base_channels=8,
+            initial_concepts=3,
+            max_concepts=6,
+            top_k=2,
+        )
+    )
+    x = torch.randn(4, 3, 32, 32)
+    y = torch.randint(0, 2, (4,))
+    out = model(x, store_memory=True)
+    assert out["output"].shape == (4, 2)
+    assert out["latent"].shape == (4, 16)
+    assert out["abstractions"].shape == (4, 3, 16)
+    assert out["active_concepts"].shape == (4, 2)
+    assert len(model.memory) == 1
+    losses = ean_loss(
+        output=out["output"],
+        target=y,
+        next_latent_pred=out["next_latent_prediction"],
+        next_latent_target=out["latent"].detach(),
+        routing_weights_full=out["routing_weights_full"],
+    )
+    losses["total"].backward()
+    assert model.encoder.features[0].weight.grad is not None
+    assert torch.isfinite(model.encoder.features[0].weight.grad).all()
 
 
 def test_memory_and_concept_stats_update():
