@@ -188,6 +188,17 @@ class SentenceWordEAN(nn.Module):
         return self.ean.evolve_from_outputs(out, next_latent_target=out["latent"].detach())
 
 
+def configure_evolution(model: SentenceWordEAN, args: argparse.Namespace) -> None:
+    """Language tasks benefit from slower concept collapse than vision smoke tests."""
+    evo = model.ean.evolution
+    evo.min_concepts = min(args.min_concepts, len(model.ean.population))
+    evo.merge_similarity_threshold = args.merge_threshold
+    evo.birth_error_threshold = args.birth_error_threshold
+    evo.novelty_threshold = args.novelty_threshold
+    evo.min_age_before_merge = args.min_age_before_merge
+    evo.min_age_before_prune = args.min_age_before_prune
+
+
 def shift_targets(y: torch.Tensor, pad_id: int) -> tuple[torch.Tensor, torch.Tensor]:
     x = y[:, :-1].contiguous()
     labels = y[:, 1:].contiguous().masked_fill(y[:, 1:].contiguous() == pad_id, -100)
@@ -247,6 +258,13 @@ def main() -> None:
     p.add_argument("--batch-size", type=int, default=32); p.add_argument("--eval-batch-size", type=int, default=64)
     p.add_argument("--vocab-size", type=int, default=6000); p.add_argument("--context-length", type=int, default=48); p.add_argument("--target-length", type=int, default=48)
     p.add_argument("--lr", type=float, default=5e-4); p.add_argument("--latent-weight", type=float, default=0.01); p.add_argument("--evolve-every", type=int, default=100)
+    p.add_argument("--min-concepts", type=int, default=10)
+    p.add_argument("--merge-threshold", type=float, default=0.9999)
+    p.add_argument("--birth-error-threshold", type=float, default=0.25)
+    p.add_argument("--novelty-threshold", type=float, default=0.15)
+    p.add_argument("--min-age-before-merge", type=int, default=100)
+    p.add_argument("--min-age-before-prune", type=int, default=100)
+    p.add_argument("--no-evolution", action="store_true")
     p.add_argument("--seed", type=int, default=42); p.add_argument("--output-dir", default="outputs/sentence_word_ean_wikitext2")
     p.add_argument("--prompt", default="The meaning of language is shaped by memory and prediction.")
     args = p.parse_args(); set_seed(args.seed)
@@ -266,8 +284,9 @@ def main() -> None:
 
     cfg = LMConfig(tok.vocab_size, tok.pad_id, tok.bos_id, tok.eos_id, args.context_length, args.target_length - 1)
     model = SentenceWordEAN(cfg).to(device)
+    configure_evolution(model, args)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.02)
-    print(json.dumps({"device": str(device), "vocab_size": tok.vocab_size, "train_pairs": len(train), "val_pairs": len(val), "test_pairs": len(test), "config": asdict(cfg)}, indent=2))
+    print(json.dumps({"device": str(device), "vocab_size": tok.vocab_size, "train_pairs": len(train), "val_pairs": len(val), "test_pairs": len(test), "config": asdict(cfg), "evolution": {"enabled": not args.no_evolution, "min_concepts": model.ean.evolution.min_concepts, "merge_threshold": model.ean.evolution.merge_similarity_threshold, "birth_error_threshold": model.ean.evolution.birth_error_threshold, "novelty_threshold": model.ean.evolution.novelty_threshold}}, indent=2))
 
     metrics_path = outdir / "metrics.csv"
     with metrics_path.open("w", newline="", encoding="utf-8") as f:
@@ -281,7 +300,7 @@ def main() -> None:
             opt.zero_grad(set_to_none=True); out = model(c, m, x, store_memory=True)
             loss, lm, _ = compute_loss(out, labels, args.latent_weight); loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step()
             valid = labels != -100; n = int(valid.sum().cpu()); total_tok += n; total_lm += float(lm.cpu()) * n
-            if step % args.evolve_every == 0:
+            if (not args.no_evolution) and step % args.evolve_every == 0:
                 ev = model.evolve(out)
                 for k, v in ev.items(): events_total[k] = events_total.get(k, 0) + int(v)
                 if ev.get("born", 0) or ev.get("merged", 0) or ev.get("pruned", 0):
