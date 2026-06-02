@@ -19,12 +19,18 @@ import argparse
 import csv
 import json
 import math
-import os
 import random
+import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
+
+# Make the repository root importable when this file is executed as
+# `python experiments/language_ean_wikitext2_train.py` in Colab.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
 import torch
@@ -104,14 +110,7 @@ class CharBlockDataset(Dataset):
 
 
 class LanguageEAN(nn.Module):
-    """Autoregressive character language model using EAN as the abstraction core.
-
-    Sequence tokens are embedded, enriched with learned positions, summarized by a
-    GRU encoder into a sequence-level evidence vector, and passed to the general
-    EvolutionaryAbstractionNetwork. The EAN hidden state conditions a lightweight
-    causal token decoder. This preserves the existing EAN core while adapting its
-    output to next-token language modeling.
-    """
+    """Autoregressive character language model using EAN as the abstraction core."""
 
     def __init__(self, config: LanguageEANConfig):
         super().__init__()
@@ -153,7 +152,7 @@ class LanguageEAN(nn.Module):
         self.lm_head.weight = self.token_embedding.weight
 
     def forward(self, input_ids: torch.Tensor, store_memory: bool = False) -> dict[str, torch.Tensor]:
-        batch_size, seq_len = input_ids.shape
+        _, seq_len = input_ids.shape
         if seq_len > self.config.block_size:
             raise ValueError(f"sequence length {seq_len} exceeds block_size {self.config.block_size}")
         positions = torch.arange(seq_len, device=input_ids.device).unsqueeze(0)
@@ -200,7 +199,8 @@ def set_seed(seed: int) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.benchmark = True
+    if torch.backends.cudnn.is_available():
+        torch.backends.cudnn.benchmark = True
 
 
 def load_wikitext2_text() -> tuple[str, str, str]:
@@ -225,28 +225,14 @@ def build_dataloaders(args: argparse.Namespace) -> tuple[CharTokenizer, DataLoad
     val_ids = tokenizer.encode(val_text)
     test_ids = tokenizer.encode(test_text)
 
-    train_ds = CharBlockDataset(
-        train_ids,
-        block_size=args.block_size,
-        stride=args.train_stride,
-        max_blocks=args.max_train_blocks,
-    )
-    val_ds = CharBlockDataset(
-        val_ids,
-        block_size=args.block_size,
-        stride=args.block_size,
-        max_blocks=args.max_eval_blocks,
-    )
-    test_ds = CharBlockDataset(
-        test_ids,
-        block_size=args.block_size,
-        stride=args.block_size,
-        max_blocks=args.max_eval_blocks,
-    )
+    train_ds = CharBlockDataset(train_ids, args.block_size, args.train_stride, args.max_train_blocks)
+    val_ds = CharBlockDataset(val_ids, args.block_size, args.block_size, args.max_eval_blocks)
+    test_ds = CharBlockDataset(test_ids, args.block_size, args.block_size, args.max_eval_blocks)
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=args.eval_batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
-    test_loader = DataLoader(test_ds, batch_size=args.eval_batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
+    pin_memory = torch.cuda.is_available() and args.device.startswith("cuda")
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=pin_memory)
+    val_loader = DataLoader(val_ds, batch_size=args.eval_batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=pin_memory)
+    test_loader = DataLoader(test_ds, batch_size=args.eval_batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=pin_memory)
     return tokenizer, train_loader, val_loader, test_loader
 
 
@@ -279,7 +265,7 @@ def evaluate(model: LanguageEAN, loader: DataLoader, device: torch.device, laten
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
             outputs = model(x, store_memory=False)
-            loss, pieces = loss_from_outputs(outputs, y, latent_weight)
+            _, pieces = loss_from_outputs(outputs, y, latent_weight)
             tokens = y.numel()
             total_tokens += tokens
             total_loss += pieces["loss"] * tokens
@@ -344,11 +330,12 @@ def train_one_epoch(
             concepts=len(model.ean_core.population),
         )
 
+    mean_lm = total_lm / max(total_tokens, 1)
     metrics = {
         "loss": total_loss / max(total_tokens, 1),
-        "lm_loss": total_lm / max(total_tokens, 1),
+        "lm_loss": mean_lm,
         "latent_loss": total_latent / max(total_tokens, 1),
-        "perplexity": float(math.exp(min(total_lm / max(total_tokens, 1), 20.0))),
+        "perplexity": float(math.exp(min(mean_lm, 20.0))),
     }
     return metrics, optimizer, total_events
 
@@ -356,33 +343,22 @@ def train_one_epoch(
 @torch.no_grad()
 def generate_text(model: LanguageEAN, tokenizer: CharTokenizer, prompt: str, device: torch.device, max_new_chars: int = 256, temperature: float = 0.9) -> str:
     model.eval()
-    ids = tokenizer.encode(prompt)
-    if not ids:
-        ids = [tokenizer.unk_id]
+    ids = tokenizer.encode(prompt) or [tokenizer.unk_id]
     context = torch.tensor(ids[-model.config.block_size :], dtype=torch.long, device=device).unsqueeze(0)
     for _ in range(max_new_chars):
         if context.size(1) < model.config.block_size:
             pad = torch.full((1, model.config.block_size - context.size(1)), tokenizer.pad_id, dtype=torch.long, device=device)
             model_input = torch.cat([pad, context], dim=1)
-            last_index = model.config.block_size - 1
         else:
             model_input = context[:, -model.config.block_size :]
-            last_index = model.config.block_size - 1
-        logits = model(model_input, store_memory=False)["logits"][:, last_index, :] / max(temperature, 1e-5)
+        logits = model(model_input, store_memory=False)["logits"][:, -1, :] / max(temperature, 1e-5)
         probs = torch.softmax(logits, dim=-1)
         next_id = torch.multinomial(probs, num_samples=1)
         context = torch.cat([context, next_id], dim=1)
     return tokenizer.decode(context.squeeze(0).tolist())
 
 
-def save_checkpoint(
-    output_dir: Path,
-    model: LanguageEAN,
-    tokenizer: CharTokenizer,
-    args: argparse.Namespace,
-    epoch: int,
-    val_metrics: dict[str, float],
-) -> None:
+def save_checkpoint(output_dir: Path, model: LanguageEAN, tokenizer: CharTokenizer, args: argparse.Namespace, epoch: int, val_metrics: dict[str, float]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
@@ -478,7 +454,6 @@ def main() -> None:
         train_metrics, optimizer, events = train_one_epoch(model, train_loader, optimizer, device, args, epoch)
         val_metrics = evaluate(model, val_loader, device, args.latent_weight)
         elapsed = time.time() - start
-
         common = {
             "epoch": epoch,
             "concepts": len(model.ean_core.population),
