@@ -3,11 +3,17 @@ from __future__ import annotations
 """Qwen-style staged training pipeline for a compact EAN chat model.
 
 This is not a Qwen clone. It is a Colab-scale EAN language model trained with a
-Qwen-inspired curriculum:
+Qwen-inspired curriculum and a modern hybrid tokenizer path:
 
 1. base causal language pretraining
 2. supervised instruction tuning
 3. chat-format fine-tuning
+
+Tokenizer strategy:
+- try a Qwen tokenizer first;
+- fall back to GPT-style byte-level BPE if Qwen is unavailable;
+- inject EAN/ChatML special tokens;
+- optionally extend the tokenizer with frequent corpus tokens.
 
 Run:
     python experiments/qwen_style_ean_chat_pipeline.py --device cuda --quick
@@ -29,11 +35,12 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 from datasets import load_dataset
+from transformers import AutoTokenizer
 
 from ean import EANConfig, EvolutionaryAbstractionNetwork
 
-TOK_RE = re.compile(r"<\|[^|]+\|>|[A-Za-z]+(?:'[A-Za-z]+)?|[0-9]+|[^\w\s]")
-SPECIALS = ["<pad>", "<unk>", "<bos>", "<eos>", "<|system|>", "<|user|>", "<|assistant|>", "<|think|>", "<|answer|>", "<|end|>"]
+EAN_SPECIALS = ["<|system|>", "<|user|>", "<|assistant|>", "<|think|>", "<|answer|>", "<|end|>"]
+DOMAIN_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_\-]{3,}")
 
 
 @dataclass(frozen=True)
@@ -51,63 +58,88 @@ class ChatEANConfig:
     dropout: float = 0.10
 
 
-class WordChatTokenizer:
-    def __init__(self, texts: list[str], vocab_size: int):
+class HybridEANTokenizer:
+    """Modern tokenizer wrapper for EAN chat experiments.
+
+    Qwen-family tokenizers are preferred because they already encode ChatML-style
+    prompting well. GPT-2 byte-level BPE is used as a robust fallback because it
+    has byte coverage and avoids catastrophic unknown-token behavior on arbitrary
+    text. Extra EAN control tokens are injected for staged chat training.
+    """
+
+    def __init__(self, model_name: str, texts: list[str], extra_domain_tokens: int = 0):
+        self.model_name = model_name
+        self.tokenizer = self._load_tokenizer(model_name)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token or self.tokenizer.unk_token
+        special = {"additional_special_tokens": [t for t in EAN_SPECIALS if t not in self.tokenizer.get_vocab()]}
+        self.tokenizer.add_special_tokens(special)
+        if extra_domain_tokens > 0:
+            self._extend_with_domain_tokens(texts, extra_domain_tokens)
+        self.pad_id = int(self.tokenizer.pad_token_id)
+        self.eos_id = int(self.tokenizer.eos_token_id) if self.tokenizer.eos_token_id is not None else self.pad_id
+
+    def _load_tokenizer(self, model_name: str):
+        candidates = [model_name]
+        if model_name != "Qwen/Qwen3-0.6B":
+            candidates.append("Qwen/Qwen3-0.6B")
+        candidates += ["Qwen/Qwen2.5-0.5B", "gpt2"]
+        errors = []
+        for name in candidates:
+            try:
+                tok = AutoTokenizer.from_pretrained(name, trust_remote_code=True, use_fast=True)
+                self.loaded_name = name
+                return tok
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
+        raise RuntimeError("Could not load any tokenizer. Errors: " + " | ".join(errors))
+
+    def _extend_with_domain_tokens(self, texts: list[str], limit: int) -> None:
+        vocab = self.tokenizer.get_vocab()
         counts = Counter()
         for text in texts:
-            counts.update(self.tokenize(text))
-        words = [w for w, _ in counts.most_common(max(0, vocab_size - len(SPECIALS))) if w not in SPECIALS]
-        self.itos = SPECIALS + words
-        self.stoi = {w: i for i, w in enumerate(self.itos)}
-        self.pad_id, self.unk_id, self.bos_id, self.eos_id = [self.stoi[t] for t in SPECIALS[:4]]
-
-    @staticmethod
-    def tokenize(text: str) -> list[str]:
-        return [t if t.startswith("<|") else t.lower() for t in TOK_RE.findall(text)]
+            counts.update(DOMAIN_TOKEN_RE.findall(text))
+        added = []
+        for token, freq in counts.most_common(limit * 5):
+            if freq < 3:
+                continue
+            if token in vocab or token.lower() in vocab:
+                continue
+            # Only add reasonably semantic whole tokens. Byte/BPE handles the rest.
+            if 4 <= len(token) <= 32:
+                added.append(token)
+            if len(added) >= limit:
+                break
+        if added:
+            self.tokenizer.add_tokens(added)
 
     @property
     def vocab_size(self) -> int:
-        return len(self.itos)
+        return len(self.tokenizer)
 
-    def encode(self, text: str, add_bos: bool = True, add_eos: bool = True) -> list[int]:
-        ids = [self.stoi.get(t, self.unk_id) for t in self.tokenize(text)]
-        if add_bos:
-            ids = [self.bos_id] + ids
-        if add_eos:
-            ids.append(self.eos_id)
-        return ids
+    def encode(self, text: str, add_special_tokens: bool = True) -> list[int]:
+        return self.tokenizer.encode(text, add_special_tokens=add_special_tokens)
 
     def decode(self, ids: list[int]) -> str:
-        out = []
-        for i in ids:
-            i = int(i)
-            if i in {self.pad_id, self.bos_id}:
-                continue
-            if i == self.eos_id:
-                break
-            out.append(self.itos[i] if 0 <= i < len(self.itos) else "<unk>")
-        text = " ".join(out)
-        text = re.sub(r"\s+([.,!?;:])", r"\1", text)
-        text = text.replace("<|end|>", "").strip()
-        return text
+        return self.tokenizer.decode(ids, skip_special_tokens=False)
 
     def state(self) -> dict:
-        return {"itos": self.itos, "pad_id": self.pad_id, "unk_id": self.unk_id, "bos_id": self.bos_id, "eos_id": self.eos_id}
+        return {"tokenizer_name": self.loaded_name, "pad_id": self.pad_id, "eos_id": self.eos_id, "vocab_size": self.vocab_size, "ean_specials": EAN_SPECIALS}
 
 
 class LMDataset(Dataset):
-    def __init__(self, texts: list[str], tok: WordChatTokenizer, block_size: int):
+    def __init__(self, texts: list[str], tok: HybridEANTokenizer, block_size: int):
         self.samples = []
+        self.block_size = block_size
+        self.pad_id = tok.pad_id
         for text in texts:
-            ids = tok.encode(text)
+            ids = tok.encode(text, add_special_tokens=True)
             if len(ids) < 4:
                 continue
             for start in range(0, max(1, len(ids) - 1), block_size):
                 chunk = ids[start:start + block_size + 1]
                 if len(chunk) >= 4:
                     self.samples.append(chunk)
-        self.block_size = block_size
-        self.pad_id = tok.pad_id
         if not self.samples:
             raise ValueError("No valid LM samples were built.")
 
@@ -233,7 +265,7 @@ def train_stage(model, loader, opt, device, args, name):
 
 @torch.no_grad()
 def generate(model, tok, prompt, device, max_new=80, temperature=0.8):
-    model.eval(); ids = tok.encode(prompt, add_bos=True, add_eos=False)[-model.cfg.block_size:]
+    model.eval(); ids = tok.encode(prompt, add_special_tokens=True)[-model.cfg.block_size:]
     x = torch.tensor([ids], dtype=torch.long, device=device)
     for _ in range(max_new):
         inp = x[:, -model.cfg.block_size:]
@@ -258,10 +290,12 @@ def configure_evolution(model, args):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu"); p.add_argument("--quick", action="store_true")
-    p.add_argument("--vocab-size", type=int, default=12000); p.add_argument("--block-size", type=int, default=128); p.add_argument("--batch-size", type=int, default=32)
+    p.add_argument("--tokenizer-name", default="Qwen/Qwen3-0.6B")
+    p.add_argument("--extra-domain-tokens", type=int, default=256)
+    p.add_argument("--block-size", type=int, default=128); p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--pretrain-epochs", type=int, default=2); p.add_argument("--instruct-epochs", type=int, default=2); p.add_argument("--chat-epochs", type=int, default=2)
     p.add_argument("--pretrain-samples", type=int, default=6000); p.add_argument("--instruct-samples", type=int, default=2500); p.add_argument("--chat-samples", type=int, default=2500)
-    p.add_argument("--lr", type=float, default=4e-4); p.add_argument("--weight-decay", type=float, default=0.02); p.add_argument("--latent-weight", type=float, default=0.01); p.add_argument("--grad-clip", type=float, default=1.0)
+    p.add_argument("--lr", type=float, default=3e-4); p.add_argument("--weight-decay", type=float, default=0.02); p.add_argument("--latent-weight", type=float, default=0.01); p.add_argument("--grad-clip", type=float, default=1.0)
     p.add_argument("--evolve-every", type=int, default=100); p.add_argument("--min-concepts", type=int, default=10); p.add_argument("--merge-threshold", type=float, default=0.9999)
     p.add_argument("--birth-error-threshold", type=float, default=0.25); p.add_argument("--novelty-threshold", type=float, default=0.15); p.add_argument("--min-age-before-merge", type=int, default=100); p.add_argument("--min-age-before-prune", type=int, default=100); p.add_argument("--no-evolution", action="store_true")
     p.add_argument("--seed", type=int, default=42); p.add_argument("--output-dir", default="outputs/qwen_style_ean_chat")
@@ -272,11 +306,11 @@ def main():
     outdir = Path(args.output_dir); outdir.mkdir(parents=True, exist_ok=True)
 
     pre = load_pretrain(args.pretrain_samples); inst = load_instruct(args.instruct_samples); chat = load_chat(args.chat_samples)
-    tok = WordChatTokenizer((pre[:2000] + inst + chat), vocab_size=args.vocab_size)
+    tok = HybridEANTokenizer(args.tokenizer_name, pre[:2000] + inst + chat, extra_domain_tokens=args.extra_domain_tokens)
     cfg = ChatEANConfig(tok.vocab_size, tok.pad_id, args.block_size)
     model = QwenStyleEANLM(cfg).to(device); configure_evolution(model, args)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    print(json.dumps({"device":str(device), "vocab_size":tok.vocab_size, "config":asdict(cfg), "samples":{"pretrain":len(pre),"instruct":len(inst),"chat":len(chat)}}, indent=2))
+    print(json.dumps({"device":str(device), "tokenizer":tok.state(), "config":asdict(cfg), "samples":{"pretrain":len(pre),"instruct":len(inst),"chat":len(chat)}}, indent=2))
 
     history = []
     stages = [("pretrain", pre, args.pretrain_epochs), ("instruct", inst, args.instruct_epochs), ("chat", chat, args.chat_epochs)]
